@@ -18,17 +18,13 @@ public class MoviesStore {
     }
 
     public List<Movie> findByYear(int year) {
-        List<Movie> result = new ArrayList<>();
-        for (Movie movie : movies.values()) {
-            if (movie.getYear() == year) {
-                result.add(movie);
-            }
-        }
-        return result;
+        return movies.values().stream()
+                .filter(movie -> movie.getYear() == year)
+                .toList();
     }
 
-    public Movie add(String title, int year) {
-        Movie movie = new Movie(nextId.getAndIncrement(), title, year);
+    public Movie add(Movie movie) {
+        movie.setId(nextId.getAndIncrement());
         movies.put(movie.getId(), movie);
         return movie;
     }

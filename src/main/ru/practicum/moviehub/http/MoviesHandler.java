@@ -25,26 +25,19 @@ public class MoviesHandler extends BaseHttpHandler {
     public void handle(HttpExchange exchange) throws IOException {
         try {
             String method = exchange.getRequestMethod();
-            String path = exchange.getRequestURI().getPath();
-
-            if (path.endsWith("/") && path.length() > 1) {
-                sendError(exchange, 404, "Ресурс не найден");
-                return;
+            switch (method) {
+                case "GET":
+                    handleGet(exchange);
+                    return;
+                case "POST":
+                    handlePost(exchange);
+                    return;
+                case "DELETE":
+                    handleDelete(exchange);
+                    return;
+                default:
+                    sendError(exchange, 405, "Метод не поддерживается");
             }
-
-            String[] parts = path.split("/");
-
-            if (parts.length == 2 && parts[1].equals("movies")) {
-                handleCollection(exchange, method);
-                return;
-            }
-
-            if (parts.length == 3 && parts[1].equals("movies") && !parts[2].isEmpty()) {
-                handleMovie(exchange, method, parts[2]);
-                return;
-            }
-
-            sendError(exchange, 404, "Ресурс не найден");
         } catch (Exception exception) {
             if (!exchange.getResponseHeaders().containsKey("Content-Type")) {
                 sendError(exchange, 500, "Внутренняя ошибка сервера");
@@ -52,32 +45,71 @@ public class MoviesHandler extends BaseHttpHandler {
         }
     }
 
-    private void handleCollection(HttpExchange exchange, String method) throws IOException {
-        if (method.equals("GET")) {
-            Integer year = getYear(exchange.getRequestURI());
-            if (year == null && hasYearParameter(exchange.getRequestURI())) {
-                sendError(exchange, 400, "Некорректный параметр запроса - 'year'");
-                return;
-            }
-            List<Movie> movies;
-            if (year == null) {
-                movies = store.findAll();
-            } else {
-                movies = store.findByYear(year);
-            }
-            sendJson(exchange, 200, gson.toJson(movies));
+    private void handleGet(HttpExchange exchange) throws IOException {
+        String[] parts = getPathParts(exchange);
+
+        if (parts.length == 2 && parts[1].equals("movies")) {
+            handleGetCollection(exchange);
             return;
         }
 
-        if (method.equals("POST")) {
-            addMovie(exchange);
+        if (parts.length == 3 && parts[1].equals("movies") && !parts[2].isEmpty()) {
+            handleGetMovie(exchange, parts[2]);
             return;
         }
 
-        sendError(exchange, 405, "Метод не поддерживается");
+        sendError(exchange, 404, "Ресурс не найден");
     }
 
-    private void addMovie(HttpExchange exchange) throws IOException {
+    private void handlePost(HttpExchange exchange) throws IOException {
+        String[] parts = getPathParts(exchange);
+
+        if (parts.length == 2 && parts[1].equals("movies")) {
+            handlePostMovie(exchange);
+            return;
+        }
+
+        sendError(exchange, 404, "Ресурс не найден");
+    }
+
+    private void handleDelete(HttpExchange exchange) throws IOException {
+        String[] parts = getPathParts(exchange);
+
+        if (parts.length == 3 && parts[1].equals("movies") && !parts[2].isEmpty()) {
+            handleDeleteMovie(exchange, parts[2]);
+            return;
+        }
+
+        sendError(exchange, 404, "Ресурс не найден");
+    }
+
+    private void handleGetCollection(HttpExchange exchange) throws IOException {
+        Integer year = getYear(exchange.getRequestURI());
+        if (year == null && hasYearParameter(exchange.getRequestURI())) {
+            sendError(exchange, 400, "Некорректный параметр запроса - 'year'");
+            return;
+        }
+        List<Movie> movies = year == null
+                ? store.findAll()
+                : store.findByYear(year);
+        sendJson(exchange, 200, gson.toJson(movies));
+    }
+
+    private void handleGetMovie(HttpExchange exchange, String idText) throws IOException {
+        Long id = parseId(idText);
+        if (id == null) {
+            sendError(exchange, 400, "Некорректный ID");
+            return;
+        }
+        Movie movie = store.findById(id).orElse(null);
+        if (movie == null) {
+            sendError(exchange, 404, "Фильм не найден");
+        } else {
+            sendJson(exchange, 200, gson.toJson(movie));
+        }
+    }
+
+    private void handlePostMovie(HttpExchange exchange) throws IOException {
         String contentType = exchange.getRequestHeaders().getFirst("Content-Type");
         if (contentType == null || !contentType.toLowerCase().startsWith("application/json")) {
             sendError(exchange, 415, "Неподдерживаемый тип содержимого");
@@ -104,8 +136,34 @@ public class MoviesHandler extends BaseHttpHandler {
             return;
         }
 
-        Movie created = store.add(movie.getTitle(), movie.getYear());
+        Movie created = store.add(movie);
         sendJson(exchange, 201, gson.toJson(created));
+    }
+
+    private void handleDeleteMovie(HttpExchange exchange, String idText) throws IOException {
+        Long id = parseId(idText);
+        if (id == null) {
+            sendError(exchange, 400, "Некорректный ID");
+            return;
+        }
+        if (store.delete(id)) {
+            sendNoContent(exchange);
+        } else {
+            sendError(exchange, 404, "Фильм не найден");
+        }
+    }
+
+    private String[] getPathParts(HttpExchange exchange) {
+        String path = exchange.getRequestURI().getPath();
+        return path.split("/");
+    }
+
+    private Long parseId(String idText) {
+        try {
+            return Long.parseLong(idText);
+        } catch (NumberFormatException exception) {
+            return null;
+        }
     }
 
     private List<String> validate(Movie movie) {
@@ -120,36 +178,6 @@ public class MoviesHandler extends BaseHttpHandler {
             details.add("год должен быть между 1888 и " + (currentYear + 1));
         }
         return details;
-    }
-
-    private void handleMovie(HttpExchange exchange, String method, String idText) throws IOException {
-        long id;
-        try {
-            id = Long.parseLong(idText);
-        } catch (NumberFormatException exception) {
-            sendError(exchange, 400, "Некорректный ID");
-            return;
-        }
-
-        switch (method) {
-            case "GET":
-                Movie movie = store.findById(id).orElse(null);
-                if (movie == null) {
-                    sendError(exchange, 404, "Фильм не найден");
-                } else {
-                    sendJson(exchange, 200, gson.toJson(movie));
-                }
-                return;
-            case "DELETE":
-                if (store.delete(id)) {
-                    sendNoContent(exchange);
-                } else {
-                    sendError(exchange, 404, "Фильм не найден");
-                }
-                return;
-            default:
-                sendError(exchange, 405, "Метод не поддерживается");
-        }
     }
 
     private boolean hasYearParameter(URI uri) {
